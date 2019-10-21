@@ -6,10 +6,19 @@
 # ------------------------------------------------------------
 
 # Dapr CLI location
-: ${DAPR_INSTALL_DIR:="/usr/local/bin"}
+: ${DAPR_INSTALL_DIR:="$HOME/.dapr"}
 
-# sudo is required to copy binary to DAPR_INSTALL_DIR for linux
-: ${USE_SUDO:="false"}
+DAPR_INSTALL_BIN="$DAPR_INSTALL_DIR/bin"
+DAPR_INSTALL_DOWNLOADS="$DAPR_INSTALL_DIR/downloads"
+if [ ! -d $DAPR_INSTALL_DIR ]; then
+    mkdir -p $DAPR_INSTALL_DIR
+fi
+if [ ! -d $DAPR_INSTALL_BIN ]; then
+    mkdir -p $DAPR_INSTALL_BIN
+fi
+if [ ! -d $DAPR_INSTALL_DOWNLOADS ]; then
+    mkdir -p $DAPR_INSTALL_DOWNLOADS
+fi
 
 # Http request CLI
 DAPR_HTTP_REQUEST_CLI=curl
@@ -21,7 +30,7 @@ GITHUB_REPO=cli
 # Dapr CLI filename
 DAPR_CLI_FILENAME=dapr
 
-DAPR_CLI_FILE="${DAPR_INSTALL_DIR}/${DAPR_CLI_FILENAME}"
+DAPR_CLI_FILE="${DAPR_INSTALL_BIN}/${DAPR_CLI_FILENAME}"
 
 getSystemInfo() {
     ARCH=$(uname -m)
@@ -32,11 +41,6 @@ getSystemInfo() {
     esac
 
     OS=$(echo `uname`|tr '[:upper:]' '[:lower:]')
-
-    # Most linux distro needs root permission to copy the file to /usr/local/bin
-    if [ "$OS" == "linux" ] && [ "$DAPR_INSTALL_DIR" == "/usr/local/bin" ]; then
-        USE_SUDO="true"
-    fi
 }
 
 verifySupported() {
@@ -52,16 +56,6 @@ verifySupported() {
 
     echo "No prebuilt binary for ${current_osarch}"
     exit 1
-}
-
-runAsRoot() {
-    local CMD="$*"
-
-    if [ $EUID -ne 0 -a $USE_SUDO = "true" ]; then
-        CMD="sudo $CMD"
-    fi
-
-    $CMD
 }
 
 checkHttpRequestCLI() {
@@ -105,37 +99,42 @@ downloadFile() {
     DOWNLOAD_BASE="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download"
     DOWNLOAD_URL="${DOWNLOAD_BASE}/${LATEST_RELEASE_TAG}/${DAPR_CLI_ARTIFACT}"
 
-    # Create the temp directory
-    DAPR_TMP_ROOT=$(mktemp -dt dapr-install-XXXXXX)
-    ARTIFACT_TMP_FILE="$DAPR_TMP_ROOT/$DAPR_CLI_ARTIFACT"
+    # Download artifact
+    ARTIFACT_DOWNLOAD_FILE="$DAPR_INSTALL_DOWNLOADS/$DAPR_CLI_ARTIFACT"
 
     echo "Downloading $DOWNLOAD_URL ..."
     if [ "$DAPR_HTTP_REQUEST_CLI" == "curl" ]; then
-        curl -SsL "$DOWNLOAD_URL" -o "$ARTIFACT_TMP_FILE"
+        curl -SsL "$DOWNLOAD_URL" -o "$ARTIFACT_DOWNLOAD_FILE"
     else
-        wget -q -O "$ARTIFACT_TMP_FILE" "$DOWNLOAD_URL"
+        wget -q -O "$ARTIFACT_DOWNLOAD_FILE" "$DOWNLOAD_URL"
     fi
 
-    if [ ! -f "$ARTIFACT_TMP_FILE" ]; then
+    if [ ! -f "$ARTIFACT_DOWNLOAD_FILE" ]; then
         echo "failed to download $DOWNLOAD_URL ..."
         exit 1
     fi
 }
 
 installFile() {
-    tar xf "$ARTIFACT_TMP_FILE" -C "$DAPR_TMP_ROOT"
-    local tmp_root_dapr_cli="$DAPR_TMP_ROOT/$DAPR_CLI_FILENAME"
+    tar xf "$ARTIFACT_DOWNLOAD_FILE" -C "$DAPR_INSTALL_BIN"
 
-    if [ ! -f "$tmp_root_dapr_cli" ]; then
+    if [ ! -f "$DAPR_CLI_FILE" ]; then
         echo "Failed to unpack Dapr cli executable."
         exit 1
     fi
 
-    chmod o+x $tmp_root_dapr_cli
-    runAsRoot cp "$tmp_root_dapr_cli" "$DAPR_INSTALL_DIR"
+    chmod o+x $DAPR_CLI_FILE
 
     if [ -f "$DAPR_CLI_FILE" ]; then
-        echo "$DAPR_CLI_FILENAME installed into $DAPR_INSTALL_DIR successfully."
+        echo "$DAPR_CLI_FILENAME installed into $DAPR_INSTALL_BIN successfully."
+        echo "Please add $DAPR_INSTALL_BIN to your PATH."
+        INIT_SCRIPT="$HOME/.bashrc"
+        if [ -f "$INIT_SCRIPT" ]; then
+	    UPDATED_PATH=$(bash -i -c 'echo $PATH')
+	    if [[ "$UPDATED_PATH" != *"$DAPR_INSTALL_BIN"* ]]; then
+                echo "export PATH=$DAPR_INSTALL_BIN:$PATH" >> $INIT_SCRIPT
+            fi
+        fi
 
         $DAPR_CLI_FILE --version
     else 
@@ -155,12 +154,16 @@ fail_trap() {
 }
 
 cleanup() {
-    if [[ -d "${DAPR_TMP_ROOT:-}" ]]; then
-        rm -rf "$DAPR_TMP_ROOT"
+    if [ -f "${ARTIFACT_DOWNLOAD_FILE}" ]; then
+	echo "remove $ARTIFACT_DOWNLOAD_FILE"
+        rm "$ARTIFACT_DOWNLOAD_FILE"
     fi
 }
 
 installCompleted() {
+    if [[ "$(id -Gn)" != *docker* ]]; then
+        echo "To avoid sudo, please add user to group \"docker\""
+    fi
     echo -e "\nTo get started with Dapr, please visit https://github.com/dapr/docs/tree/master/getting-started"
 }
 

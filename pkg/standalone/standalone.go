@@ -112,25 +112,46 @@ func isDockerInstalled() bool {
 	return err == nil
 }
 
-func getDaprDir() (string, error) {
-	p := ""
-
-	if runtime.GOOS == daprWindowsOS {
-		p = path_filepath.FromSlash("c:/dapr")
-	} else {
+func getUnixDaprDir() (string, error) {
+	p := os.Getenv("DAPR_INSTALL_DIR")
+	if p == "" {
 		usr, err := user.Current()
 		if err != nil {
 			return "", err
 		}
 		p = path.Join(usr.HomeDir, ".dapr")
 	}
+	return p, nil
+}
 
-	err := os.MkdirAll(p, 0700)
-	if err != nil {
-		return "", err
+func getDaprDir() (p string, err error) {
+	if runtime.GOOS == daprWindowsOS {
+		p = path_filepath.FromSlash("c:/dapr")
+	} else {
+		p, err = getUnixDaprDir()
+		if err != nil {
+			return
+		}
 	}
 
-	return p, nil
+	err = os.MkdirAll(p, 0700)
+	if err != nil {
+		return
+	}
+
+	bin := path.Join(p, "bin")
+	err = os.MkdirAll(bin, 0700)
+	if err != nil {
+		return
+	}
+
+	downloads := path.Join(p, "downloads")
+	err = os.MkdirAll(downloads, 0700)
+	if err != nil {
+		return
+	}
+
+	return
 }
 
 func runRedis(wg *sync.WaitGroup, errorChan chan<- error, dir, version string) {
@@ -229,7 +250,8 @@ func installDaprBinary(wg *sync.WaitGroup, errorChan chan<- error, dir, version 
 		runtime.GOARCH,
 		archiveExt)
 
-	filepath, err := downloadFile(dir, daprURL)
+	downloadDir := path.Join(dir, "downloads")
+	filepath, err := downloadFile(downloadDir, daprURL)
 	if err != nil {
 		errorChan <- fmt.Errorf("Error downloading dapr binary: %s", err)
 		return
@@ -238,10 +260,11 @@ func installDaprBinary(wg *sync.WaitGroup, errorChan chan<- error, dir, version 
 	extractedFilePath := ""
 	err = nil
 
+	binDir := path.Join(dir, "bin")
 	if archiveExt == "zip" {
-		extractedFilePath, err = unzip(filepath, dir)
+		extractedFilePath, err = unzip(filepath, binDir)
 	} else {
-		extractedFilePath, err = untar(filepath, dir)
+		extractedFilePath, err = untar(filepath, binDir)
 	}
 
 	if err != nil {
@@ -366,33 +389,21 @@ func untar(filepath, targetDir string) (string, error) {
 }
 
 func moveFileToPath(filepath string) (string, error) {
-	fileName := path_filepath.Base(filepath)
-	destFilePath := ""
+	//in unix, donot move daprd to /usr/local/bin to avoid sudo
+	//leave it at ~/.dapr/bin or $DAPR_INSTALL_DIR
 
 	if runtime.GOOS == daprWindowsOS {
 		p := os.Getenv("PATH")
-		if !strings.Contains(strings.ToLower(string(p)), strings.ToLower("c:\\dapr")) {
-			err := utils.RunCmdAndWait("SETX", "PATH", p+";c:\\dapr")
+		if !strings.Contains(strings.ToLower(string(p)), strings.ToLower("c:\\dapr\\bin")) {
+			err := utils.RunCmdAndWait("SETX", "PATH", p+";c:\\dapr\\bin")
 			if err != nil {
 				return "", err
 			}
 		}
-		return "c:\\dapr\\daprd.exe", nil
+		return "c:\\dapr\\bin\\daprd.exe", nil
 	}
 
-	destFilePath = path.Join("/usr/local/bin", fileName)
-
-	input, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		return "", err
-	}
-
-	err = ioutil.WriteFile(destFilePath, input, 0644)
-	if err != nil {
-		return "", err
-	}
-
-	return destFilePath, nil
+	return filepath, nil
 }
 
 type githubRepoReleaseItem struct {

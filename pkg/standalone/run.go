@@ -94,6 +94,12 @@ func getDaprCommand(appID string, daprHTTPPort int, daprGRPCPort int, appPort in
 	daprCMD := "daprd"
 	if runtime.GOOS == "windows" {
 		daprCMD = fmt.Sprintf("%s.exe", daprCMD)
+	} else {
+		dir, err := getUnixDaprDir()
+		if err != nil {
+			return nil, -1, -1, err
+		}
+		daprCMD = path.Join(dir, "bin", daprCMD)
 	}
 
 	args := []string{"--dapr-id", appID, "--dapr-http-port", fmt.Sprintf("%v", daprHTTPPort), "--dapr-grpc-port", fmt.Sprintf("%v", daprGRPCPort), "--log-level", logLevel, "--max-concurrency", fmt.Sprintf("%v", maxConcurrency), "--protocol", protocol}
